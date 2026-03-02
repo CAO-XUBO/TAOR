@@ -3,9 +3,9 @@ import numpy as np
 import matplotlib.pyplot as plt
 
 # 1. Load datasets
-central_supply = pd.read_csv('data/Room_data_General Teaching_Central.csv')
-central_demand = pd.read_csv('data/2024-5_data_demand_General Teaching_Central.csv')
-holyrood_demand = pd.read_csv('data/2024-5_data_demand_General Teaching_Holyrood(1).csv')
+central_supply = pd.read_csv('processed_data/Room_data_General Teaching_Central.csv')
+central_demand = pd.read_csv('processed_data/2024-5_data_demand_General Teaching_Central.csv')
+holyrood_demand = pd.read_csv('processed_data/2024-5_data_demand_General Teaching_Holyrood.csv')
 
 # 2. Extract Room Capacity and Supply Baseline
 central_supply['Capacity'] = pd.to_numeric(central_supply['Capacity'], errors='coerce').fillna(0)

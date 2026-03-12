@@ -1,0 +1,12 @@
+{
+  "source_summary": "C:\\Users\\qiubai\\Desktop\\TAOR DATA\\clean_outputs\\scenario1_space\\scenario1_space_summary.csv",
+  "source_decision": "C:\\Users\\qiubai\\Desktop\\TAOR DATA\\clean_outputs\\scenario1_space\\scenario1_space_decision.json",
+  "generated_files": [
+    "scenario1_report_kpi_table.csv",
+    "scenario1_unassigned_by_scenario.png",
+    "scenario1_tradeoff_scatter.png",
+    "scenario1_shift_profile.png",
+    "scenario1_commute_conflicts_by_scenario.png",
+    "scenario1_report_summary.md"
+  ]
+}

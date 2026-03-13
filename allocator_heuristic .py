@@ -2,7 +2,7 @@ import numpy as np
 import pandas as pd
 from Hyperparameter import *
 
-def calculate_objective_score(allocation_resultes):
+def calculate_objective_score(allocation_results):
     metrics = {
         "unscheduled_count": 0,
         'time_shifted_count': 0,
@@ -12,26 +12,21 @@ def calculate_objective_score(allocation_resultes):
 
     total_penalty = 0
 
-    for record in allocation_resultes:
+    for record in allocation_results:
         if record['Status'] == "Unscheduled":
             total_penalty += W_UNSCHEDULED
             metrics["unscheduled_count"] += 1
-            continue
+        else:
+            total_penalty += record.get('Penalty', 0)
 
-        if record['Assigned_Time'] != record["Original_Time"]:
-            total_penalty += W_TIME_SHIFT
-            metrics["time_shifted_count"] += 1
-
-        if record['Assigned_Campus'] != "Central":
-            total_penalty += W_CAMPUS_SHIFT
-            metrics["campus_shifted_count"] += 1
-
-        wasted = record['Assigned_Capacity'] - record['Event_Size']
-        total_penalty += (W_WASTED_SEAT * wasted)
-        metrics['wasted_seats_count'] += wasted
+            if record['Assigned_Time'] != record["Original_Time"]:
+                metrics["time_shifted_count"] += 1
+            if record['Assigned_Campus'] != "Central":
+                metrics["campus_shifted_count"] += 1
+            wasted = record['Assigned_Capacity'] - record['Event_Size']
+            metrics['wasted_seats_count'] += wasted
 
     return total_penalty, metrics
-
 
 def get_time_blocks(start_time, num_blocks):
     start_hour = int(str(start_time).split(':')[0])
@@ -43,7 +38,6 @@ def is_room_available(room_id, week, day, time_block_list, occupied_rooms):
         if (room_id, week, day, t) in occupied_rooms:
             return False
     return True
-
 
 def is_module_clashing(module_code, event_type, week, day, time_block_list, module_schedule):
     if pd.isna(module_code) or pd.isna(event_type):
@@ -62,7 +56,6 @@ def is_module_clashing(module_code, event_type, week, day, time_block_list, modu
             if is_current_exclusive or is_existing_exclusive:
                 return True
     return False
-
 
 def prefill_local_demand(local_demand_df, occupied_rooms, module_schedule, active_lectures):
     for _, row in local_demand_df.iterrows():
@@ -86,7 +79,6 @@ def prefill_local_demand(local_demand_df, occupied_rooms, module_schedule, activ
                         active_lectures[(week, day, t)] = set()
                     active_lectures[(week, day, t)].add(mod_code)
 
-
 def allocate_events(demand_df, rooms_list, occupied_rooms, module_schedule, active_lectures, student_clash_dict):
     allocation_results = []
 
@@ -107,8 +99,19 @@ def allocate_events(demand_df, rooms_list, occupied_rooms, module_schedule, acti
         best_plan = None
         min_penalty = float('inf')
 
+        day_rank = {'Monday': 0, 'Tuesday': 1, 'Wednesday': 2, 'Thursday': 3, 'Friday': 4}
+
         search_times = [(orig_day, orig_time)]
+        orig_rank = day_rank.get(orig_day, 0)
+
+        orig_hour = int(str(orig_time).split(':')[0])
+
         for d in all_possible_days:
+            test_rank = day_rank.get(d, 0)
+
+            if abs(test_rank - orig_rank) > MAX_DAY_SHIFT:
+                continue
+
             for t in all_possible_times:
                 if (d, t) != (orig_day, orig_time):
                     search_times.append((d, t))
@@ -141,8 +144,16 @@ def allocate_events(demand_df, rooms_list, occupied_rooms, module_schedule, acti
                     continue
                 # Calculate the penalty
                 penalty = time_clash_penalty
-                if test_day != orig_day or test_time != orig_time:
-                    penalty += W_TIME_SHIFT
+
+                test_rank = day_rank.get(test_day, 0)
+                test_hour = int(str(test_time).split(':')[0])
+
+                day_diff = abs(test_rank - orig_rank)
+                hour_diff = abs(test_hour - orig_hour)
+
+                penalty += (day_diff * W_DAY_SHIFT)
+                penalty += (hour_diff * W_HOUR_SHIFT)
+
                 if campus != 'Central':
                     penalty += W_CAMPUS_SHIFT
                 penalty += W_WASTED_SEAT * (capacity - size)
@@ -162,9 +173,10 @@ def allocate_events(demand_df, rooms_list, occupied_rooms, module_schedule, acti
                         'Status': 'Scheduled'
                     }
                     found_room_for_this_time = True
-                    break
+                    if penalty == 0:
+                        break
 
-            if found_room_for_this_time:
+            if min_penalty == 0:
                 break
 
         if best_plan:
@@ -202,6 +214,10 @@ if __name__ == "__main__":
     rooms_df = pd.read_csv('processed_data/Room_data_General Teaching_Central.csv')
 
     clash_df = pd.read_csv('processed_data/student_clash_matrix.csv')
+
+    # Sort by the number of students
+    demand_df = demand_df.sort_values(by=['Event Size'], ascending=False).reset_index(drop=True)
+
     student_clash_dict = {}
     for _, row in clash_df.iterrows():
         student_clash_dict[(row['Module_A'], row['Module_B'])] = row['Clash_Count']

@@ -1,8 +1,22 @@
 import pandas as pd
+import numpy as np
+import re
 
 def data_loader(filepath):
     origin_data = pd.read_excel(filepath)
     return origin_data
+
+def extract_base_code(code_str):
+    """
+    Extract the standard module code (4 letters + 5 digits, e.g., ECNM10070)
+    from dirty strings like ECNM10070_SV1_SEM1_2024/5 or lists of strings.
+    """
+    if pd.isna(code_str):
+        return np.nan
+    match = re.search(r'([A-Z]{4}\d{5})', str(code_str).upper())
+    if match:
+        return match.group(1)
+    return np.nan
 
 def data_extraction(origin_data, target_campus, target_room_type="General Teaching"):
     '''
@@ -24,18 +38,69 @@ def data_extraction(origin_data, target_campus, target_room_type="General Teachi
     target_rooms = target_campus_data[target_campus_data["Room type 2"] == target_room_type]["Room"].unique()
 
     # Reverse data screening
-    target_data = target_campus_data[target_campus_data["Room"].isin(target_rooms)]
+    target_data = target_campus_data[target_campus_data["Room"].isin(target_rooms)].copy()
+
+    target_data.dropna(subset=["Weeks", "Timeslot"], inplace=True)
+
+    target_data["Weeks"] = target_data['Weeks'].astype(str).str.split(',')
+    target_data = target_data.explode('Weeks')
+    target_data['Weeks'] = target_data['Weeks'].str.strip()
+    target_data = target_data[target_data['Weeks'] != 'nan']
+    target_data[['Day', 'Start_Time']] = target_data['Timeslot'].str.split(' ', expand=True)
+
+    target_data['Duration (minutes)'] = pd.to_numeric(target_data['Duration (minutes)'], errors='coerce').fillna(60)
+    target_data['Time_Blocks'] = np.ceil(target_data['Duration (minutes)'] / 60.0).astype(int)
+
+    target_data['Session_ID'] = target_data['Event ID'] + "_W" + target_data['Weeks']
+
+    target_data['Event Size'] = pd.to_numeric(target_data['Event Size'], errors='coerce').fillna(0)
+    target_data = target_data.sort_values(by=['Event Size'], ascending=False).reset_index(drop=True)
 
     return target_data
 
-def data_output(target_data, output_filepath):
-    target_data.to_csv(output_filepath)
+def clean_event_type(event_str):
+    """
+    Even type cleaning
+    """
+    if pd.isna(event_str):
+        return 'Other'
+
+    s = str(event_str).upper() # Uniform capitalisation to prevent omissions
+
+    # Delete
+    if any(kw in s for kw in ['EXAM', 'TEST', 'PRESENTATION', 'SELF STUDY']):
+        return 'DROP'
+
+    # Lecture
+    if any(kw in s for kw in ['LECTURE', 'Q&A', 'INDUCTION', 'FIRST CLASS']):
+        return 'Lecture'
+
+    # Tutorial/Seminar/Workshop
+    if 'TUTORIAL' in s:
+        return 'Tutorial'
+    if 'SEMINAR' in s:
+        return 'Seminar'
+    if 'WORKSHOP' in s:
+        return 'Workshop'
+
+    # Activity/Lab/Breakout
+    if any(kw in s for kw in ['ACTIVITY', 'BREAKOUT', 'PRACTICAL', 'LABORATORY', 'STUDIO', 'GROUPWORK', 'CRIT']):
+        return 'Activity'
+
+    # Meeting/Feedback
+    if any(kw in s for kw in ['MEETING', 'FEEDBACK', 'REVIEW']):
+        return 'Meeting'
+
+    return 'Other'
+
+def data_output(df, output_filepath):
+    df.to_csv(output_filepath)
 
 if __name__ == "__main__":
     # Origin data and processed data file path
     filepath = "origin_data/2024-5 Event Module Room.xlsx"
 
-    target_campus = "Holyrood"
+    target_campus = "Central"
     target_room_type = "General Teaching"
 
     output_filename = f"2024-5_data_demand_{target_room_type}_{target_campus}.csv"
@@ -45,4 +110,13 @@ if __name__ == "__main__":
 
     target_data = data_extraction(origin_data, target_campus, target_room_type)
 
-    data_output(target_data, output_filepath)
+    target_data['Module Code'] = target_data['Module Code'].apply(extract_base_code)
+
+    target_data['Clean_Type'] = target_data['Event Type'].apply(clean_event_type)
+
+    clean_target_data = target_data[target_data['Clean_Type'] != 'DROP'].copy()
+
+    clean_target_data['Event Type'] = clean_target_data['Clean_Type']
+    clean_target_data.drop(columns=['Clean_Type'], inplace=True)
+
+    data_output(clean_target_data, output_filepath)

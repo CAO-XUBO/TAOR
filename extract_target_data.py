@@ -1,9 +1,22 @@
 import pandas as pd
 import numpy as np
+import re
 
 def data_loader(filepath):
     origin_data = pd.read_excel(filepath)
     return origin_data
+
+def extract_base_code(code_str):
+    """
+    Extract the standard module code (4 letters + 5 digits, e.g., ECNM10070)
+    from dirty strings like ECNM10070_SV1_SEM1_2024/5 or lists of strings.
+    """
+    if pd.isna(code_str):
+        return np.nan
+    match = re.search(r'([A-Z]{4}\d{5})', str(code_str).upper())
+    if match:
+        return match.group(1)
+    return np.nan
 
 def data_extraction(origin_data, target_campus, target_room_type="General Teaching"):
     '''
@@ -87,7 +100,7 @@ if __name__ == "__main__":
     # Origin data and processed data file path
     filepath = "origin_data/2024-5 Event Module Room.xlsx"
 
-    target_campus = "Holyrood"
+    target_campus = "Central"
     target_room_type = "General Teaching"
 
     output_filename = f"2024-5_data_demand_{target_room_type}_{target_campus}.csv"
@@ -96,6 +109,8 @@ if __name__ == "__main__":
     origin_data = data_loader(filepath)
 
     target_data = data_extraction(origin_data, target_campus, target_room_type)
+
+    target_data['Module Code'] = target_data['Module Code'].apply(extract_base_code)
 
     target_data['Clean_Type'] = target_data['Event Type'].apply(clean_event_type)
 

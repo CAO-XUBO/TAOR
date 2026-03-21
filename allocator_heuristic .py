@@ -7,7 +7,8 @@ def calculate_objective_score(allocation_results):
         "unscheduled_count": 0,
         'time_shifted_count': 0,
         'campus_shifted_count': 0,
-        'wasted_seats_count': 0
+        'wasted_seats_count': 0,
+        'total_student_clashes': 0
     }
 
     total_penalty = 0
@@ -18,6 +19,8 @@ def calculate_objective_score(allocation_results):
             metrics["unscheduled_count"] += 1
         else:
             total_penalty += record.get('Penalty', 0)
+
+            metrics['total_student_clashes'] += record.get('Clash_Count', 0)
 
             if record['Assigned_Time'] != record["Original_Time"]:
                 metrics["time_shifted_count"] += 1
@@ -123,12 +126,14 @@ def allocate_events(demand_df, rooms_list, occupied_rooms, module_schedule, acti
                 continue
 
             time_clash_penalty = 0
+            raw_clash_count = 0
             if event_type in ['Lecture', 'Meeting'] and not pd.isna(mod_code):
                 for t in test_t_blocks:
                     existing_mods = active_lectures.get((orig_week, test_day, t), set())
                     for e_mod in existing_mods:
-                        clash_count = student_clash_dict.get((mod_code, e_mod), 0)
-                        time_clash_penalty += clash_count * W_STUDENT_CLASH
+                        clashes = student_clash_dict.get((mod_code, e_mod), 0)
+                        raw_clash_count += clashes
+                        time_clash_penalty += clashes * W_STUDENT_CLASH
 
             found_room_for_this_time = False
 
@@ -170,6 +175,7 @@ def allocate_events(demand_df, rooms_list, occupied_rooms, module_schedule, acti
                         'Assigned_Campus': campus,
                         'Assigned_Capacity': capacity,
                         'Penalty': penalty,
+                        'Clash_Count': raw_clash_count,
                         'Status': 'Scheduled'
                     }
                     found_room_for_this_time = True
@@ -244,5 +250,12 @@ if __name__ == "__main__":
     success_count = total_events - unscheduled_count
     fail_rate = (unscheduled_count / total_events) * 100
 
-    print(f"Unable to be accommodated within the timetable: {unscheduled_count}")
-    print(f"Failure Rate: {fail_rate:.2f}%")
+    print("\n" + "=" * 40)
+    print(f"Total Events Processed: {total_events}")
+    print(f"Failure Rate:           {fail_rate:.2f}% ({unscheduled_count} unscheduled)")
+    print(f"Time Shifted Count:     {metrics['time_shifted_count']}")
+    print(f"Campus Shifted Count:   {metrics['campus_shifted_count']}")
+    print(f"Wasted Seats Total:     {metrics['wasted_seats_count']}")
+    print(f"Total Student Clashes:  {metrics['total_student_clashes']}")
+    print(f"Total Objective Penalty:{final_score}")
+    print("=" * 40 + "\n")

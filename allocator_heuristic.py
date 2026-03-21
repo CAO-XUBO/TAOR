@@ -1,6 +1,8 @@
 import numpy as np
 import pandas as pd
 from Hyperparameter import *
+import os
+import argparse
 
 def calculate_objective_score(allocation_results):
     metrics = {
@@ -215,6 +217,21 @@ def allocate_events(demand_df, rooms_list, occupied_rooms, module_schedule, acti
 
 if __name__ == "__main__":
 
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--w_clash", type=float, default=W_STUDENT_CLASH)
+    parser.add_argument("--w_day", type=float, default=W_DAY_SHIFT)
+    parser.add_argument("--w_hour", type=float, default=W_HOUR_SHIFT)
+    parser.add_argument("--w_wasted", type=float, default=W_WASTED_SEAT)
+    parser.add_argument("--exp_name", type=str, default="Default_Exp")
+    args = parser.parse_args()
+
+    W_STUDENT_CLASH = args.w_clash
+    W_DAY_SHIFT = args.w_day
+    W_HOUR_SHIFT = args.w_hour
+    W_WASTED_SEAT = args.w_wasted
+
+    print(f"\nStart the experiment: [{args.exp_name}] | Clash={W_STUDENT_CLASH}, Day={W_DAY_SHIFT}, Wasted={W_WASTED_SEAT}")
+
     demand_df = pd.read_csv('processed_data/2024-5_data_demand_General Teaching_Holyrood.csv')
     local_central_df = pd.read_csv('processed_data/2024-5_data_demand_General Teaching_Central.csv')
     rooms_df = pd.read_csv('processed_data/Room_data_General Teaching_Central.csv')
@@ -259,3 +276,13 @@ if __name__ == "__main__":
     print(f"Total Student Clashes:  {metrics['total_student_clashes']}")
     print(f"Total Objective Penalty:{final_score}")
     print("=" * 40 + "\n")
+
+    summary_file = f"results/{args.exp_name}_Summary.csv"
+    file_exists = os.path.isfile(summary_file)
+
+    with open(summary_file, "a", encoding="utf-8") as f:
+        if not file_exists:
+            f.write("W_CLASH,W_DAY,W_HOUR,W_WASTED,Time_Shifted,Wasted_Seats,Student_Clashes,Total_Penalty\n")
+        f.write(
+            f"{W_STUDENT_CLASH},{W_DAY_SHIFT},{W_HOUR_SHIFT},{W_WASTED_SEAT},{metrics['time_shifted_count']},{metrics['wasted_seats_count']},{metrics['total_student_clashes']},{final_score}\n"
+        )

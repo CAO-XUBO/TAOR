@@ -369,6 +369,18 @@ def optimize_with_sa(allocation_results, rooms_list, occupied_rooms, module_sche
     print(f"Simulated annealing complete, Total valid adjustments received {accepted_moves}. The global optimal penalty score has been reduced to: {best_penalty}")
     return best_allocation
 
+def print_stage_summary(title, score, metrics):
+    """
+    Printing the experimental results
+    """
+    print("\n" + "="*20 + f" [{title}] " + "="*20)
+    print(f"Total Penalty:          {score}")
+    print(f"Total Student Clashes:  {metrics['total_student_clashes']}")
+    print(f"Wasted Seats Total:     {metrics['wasted_seats_count']}")
+    print(f"Time Shifted Count:     {metrics['time_shifted_count']}")
+    print(f"Failure Rate:           {(metrics['unscheduled_count']/len(demand_df)*100 if 'unscheduled_count' in metrics else 0):.2f}%")
+    print("="*(42 + len(title)))
+
 
 if __name__ == "__main__":
 
@@ -411,34 +423,35 @@ if __name__ == "__main__":
 
     prefill_local_demand(local_central_df, occupied_rooms, module_schedule, active_lectures)
 
-    allocation_results = allocate_events(demand_df, rooms_list, occupied_rooms, module_schedule, active_lectures, student_clash_dict)
+    # Greedy baseline
+    greedy_results = allocate_events(demand_df, rooms_list, occupied_rooms, module_schedule, active_lectures, student_clash_dict)
+    greedy_score, greedy_metrics = calculate_objective_score(greedy_results)
+
+    print_stage_summary("STAGE 1: GREEDY BASELINE", greedy_score, greedy_metrics)
+
+    final_results = greedy_results
+    final_score = greedy_score
+    final_metrics = greedy_metrics
 
     if args.use_sa:
-        allocation_results = optimize_with_sa(
-            allocation_results, rooms_list, occupied_rooms,
+        sa_results = optimize_with_sa(
+            copy.deepcopy(greedy_results), rooms_list, occupied_rooms,
             module_schedule, active_lectures, student_clash_dict,
-            initial_temp=1000, cooling_rate=0.95, max_iter=100
+            initial_temp=5000, cooling_rate=0.98, max_iter=2000
         )
+        sa_score, sa_metrics = calculate_objective_score(sa_results)
 
-    final_score, metrics = calculate_objective_score(allocation_results)
+        print_stage_summary("STAGE 2: SA REFINEMENT", sa_score, sa_metrics)
 
-    results_df = pd.DataFrame(allocation_results)
+        improvement = (greedy_score - sa_score) / greedy_score * 100
+        print(f"Optimization Success: Penalty reduced by {improvement:.2f}%")
+
+        final_results = sa_results
+        final_score = sa_score
+        final_metrics = sa_metrics
+
+    results_df = pd.DataFrame(final_results)
     results_df.to_csv("results/Final_Allocation_Results.csv", index=False)
-
-    total_events = len(results_df)
-    unscheduled_count = metrics["unscheduled_count"]
-    success_count = total_events - unscheduled_count
-    fail_rate = (unscheduled_count / total_events) * 100
-
-    print("\n" + "=" * 40)
-    print(f"Total Events Processed: {total_events}")
-    print(f"Failure Rate:           {fail_rate:.2f}% ({unscheduled_count} unscheduled)")
-    print(f"Time Shifted Count:     {metrics['time_shifted_count']}")
-    print(f"Campus Shifted Count:   {metrics['campus_shifted_count']}")
-    print(f"Wasted Seats Total:     {metrics['wasted_seats_count']}")
-    print(f"Total Student Clashes:  {metrics['total_student_clashes']}")
-    print(f"Total Objective Penalty:{final_score}")
-    print("=" * 40 + "\n")
 
     summary_file = f"results/{args.exp_name}_Summary.csv"
     file_exists = os.path.isfile(summary_file)
@@ -447,5 +460,5 @@ if __name__ == "__main__":
         if not file_exists:
             f.write("W_CLASH,W_DAY,W_HOUR,W_WASTED,Time_Shifted,Wasted_Seats,Student_Clashes,Total_Penalty\n")
         f.write(
-            f"{W_STUDENT_CLASH},{W_DAY_SHIFT},{W_HOUR_SHIFT},{W_WASTED_SEAT},{metrics['time_shifted_count']},{metrics['wasted_seats_count']},{metrics['total_student_clashes']},{final_score}\n"
+            f"{W_STUDENT_CLASH},{W_DAY_SHIFT},{W_HOUR_SHIFT},{W_WASTED_SEAT},{final_metrics['time_shifted_count']},{final_metrics['wasted_seats_count']},{final_metrics['total_student_clashes']},{final_score}\n"
         )

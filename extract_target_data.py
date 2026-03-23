@@ -1,6 +1,7 @@
 import pandas as pd
 import numpy as np
 import re
+import math
 
 def data_loader(filepath):
     origin_data = pd.read_excel(filepath)
@@ -25,7 +26,6 @@ def data_extraction(origin_data, target_campus, target_room_type="General Teachi
     extract_data = origin_data[
         ["Module Department", "Module Code", "Event ID", "Event Type", "Duration (minutes)", "Event Size", "Timeslot",
          "Number of Weeks", "Weeks", "Room", "Room Type 1", "Room type 2", "Building", "Campus"]]
-
 
     # delete null value of "Room"
     clean_data = extract_data.copy()
@@ -70,7 +70,7 @@ def clean_event_type(event_str):
     if pd.isna(event_str):
         return 'Other'
 
-    s = str(event_str).upper() # Uniform capitalisation to prevent omissions
+    s = str(event_str).upper()  # Uniform capitalisation to prevent omissions
 
     # Delete
     if any(kw in s for kw in ['EXAM', 'TEST', 'PRESENTATION', 'SELF STUDY']):
@@ -98,6 +98,50 @@ def clean_event_type(event_str):
 
     return 'Other'
 
+
+
+def split_large_events(df):
+    new_rows = []
+
+    for _, row in df.iterrows():
+        size = row['Event Size']
+        blocks = row['Time_Blocks']
+
+        block_chunks = []
+        while blocks > 4:
+            block_chunks.append(4)
+            blocks -= 4
+        if blocks > 0:
+            block_chunks.append(blocks)
+
+        if size >= 460:
+            sizes = [math.ceil(size / 2), math.floor(size / 2)]
+            stream_labels = ['_StreamA', '_StreamB']
+        else:
+            sizes = [size]
+            stream_labels = ['']
+
+        for s_idx, s_val in enumerate(sizes):
+            for b_idx, b_val in enumerate(block_chunks):
+                new_row = row.copy()
+                new_row['Event Size'] = s_val
+                new_row['Time_Blocks'] = b_val
+
+                suffix = f"{stream_labels[s_idx]}"
+                if len(block_chunks) > 1:
+                    suffix += f"_Part{b_idx + 1}"
+
+                new_row['Event ID'] = str(new_row['Event ID']) + suffix
+                if 'Session_ID' in new_row:
+                    new_row['Session_ID'] = str(new_row['Session_ID']) + suffix
+
+                new_rows.append(new_row)
+
+    processed_df = pd.DataFrame(new_rows)
+    print(f"Preprocessing: Expanded {len(df)} original events to {len(processed_df)} manageable events.")
+    return processed_df
+
+
 def data_output(df, output_filepath):
     df.to_csv(output_filepath, index=False)
 
@@ -105,24 +149,31 @@ if __name__ == "__main__":
     # Origin data and processed data file path
     filepath = "origin_data/2024-5 Event Module Room.xlsx"
 
-    target_campus = "All"
-    # target_campus = ["Central"]
+    # target_campus = "All"
+    target_campus = ["Central"]
     target_room_type = "General Teaching"
 
-    output_filename = f"2024-5_data_demand_{target_room_type}_{target_campus}.csv"
+    if isinstance(target_campus, list):
+        campus_str = "_".join(target_campus)
+    else:
+        campus_str = target_campus
+
+    output_filename = f"2024-5_data_demand_{target_room_type}_{campus_str}.csv"
     output_filepath = f"processed_data/{output_filename}"
 
     origin_data = data_loader(filepath)
 
     target_data = data_extraction(origin_data, target_campus, target_room_type)
-
     target_data['Module Code'] = target_data['Module Code'].apply(extract_base_code)
-
     target_data['Clean_Type'] = target_data['Event Type'].apply(clean_event_type)
 
     clean_target_data = target_data[target_data['Clean_Type'] != 'DROP'].copy()
-
     clean_target_data['Event Type'] = clean_target_data['Clean_Type']
     clean_target_data.drop(columns=['Clean_Type'], inplace=True)
 
-    data_output(clean_target_data, output_filepath)
+
+    final_data = split_large_events(clean_target_data)
+
+    final_data = final_data.sort_values(by=['Event Size'], ascending=False).reset_index(drop=True)
+
+    data_output(final_data, output_filepath)

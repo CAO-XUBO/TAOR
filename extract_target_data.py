@@ -32,7 +32,12 @@ def data_extraction(origin_data, target_campus, target_room_type="General Teachi
     clean_data.dropna(subset=["Room"], inplace=True)
 
     # Pick up the target campus
-    target_campus_data = clean_data[clean_data["Campus"] == target_campus]
+    if target_campus == "All":
+        target_campus_data = clean_data
+    else:
+        if isinstance(target_campus, str):
+            target_campus = [target_campus]
+        target_campus_data = clean_data[clean_data["Campus"].isin(target_campus)]
 
     # Pick up the target transfer data
     target_rooms = target_campus_data[target_campus_data["Room type 2"] == target_room_type]["Room"].unique()
@@ -94,13 +99,14 @@ def clean_event_type(event_str):
     return 'Other'
 
 def data_output(df, output_filepath):
-    df.to_csv(output_filepath)
+    df.to_csv(output_filepath, index=False)
 
 if __name__ == "__main__":
     # Origin data and processed data file path
     filepath = "origin_data/2024-5 Event Module Room.xlsx"
 
-    target_campus = "Central"
+    target_campus = "All"
+    # target_campus = ["Central"]
     target_room_type = "General Teaching"
 
     output_filename = f"2024-5_data_demand_{target_room_type}_{target_campus}.csv"

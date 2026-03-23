@@ -250,7 +250,6 @@ def allocate_events(demand_df, rooms_list, occupied_rooms, module_schedule, acti
 
     return allocation_results
 
-
 def optimize_with_sa(allocation_results, rooms_list, occupied_rooms, module_schedule, active_lectures,
                      student_clash_dict, distance_dict, w_commute, initial_temp=1000, cooling_rate=0.98, max_iter=200):
     print(f"\nStart simulated annealing optimisation (Initial T={initial_temp}, Cooling={cooling_rate})")

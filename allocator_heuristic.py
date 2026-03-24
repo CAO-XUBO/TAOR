@@ -41,7 +41,6 @@ def get_time_blocks(start_time, num_blocks):
     start_hour = int(str(start_time).split(':')[0])
     return [f"{start_hour + b:02d}:00" for b in range(int(num_blocks))]
 
-
 def is_room_available(room_id, week, day, time_block_list, occupied_rooms):
     for t in time_block_list:
         if (room_id, week, day, t) in occupied_rooms:
@@ -83,8 +82,7 @@ def prefill_local_demand(local_demand_df, occupied_rooms, module_schedule, activ
                         active_lectures[(week, day, t)] = set()
                     active_lectures[(week, day, t)].add(mod_code)
 
-def allocate_events(demand_df, rooms_list, occupied_rooms, module_schedule, active_lectures, student_clash_dict,
-                    distance_dict, w_commute):
+def allocate_events(demand_df, rooms_list, occupied_rooms, module_schedule, active_lectures, student_clash_dict, distance_dict, w_commute):
     allocation_results = []
     all_possible_days = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday']
     all_possible_times = [f"{str(h).zfill(2)}:00" for h in range(9, 18)]
@@ -134,6 +132,45 @@ def allocate_events(demand_df, rooms_list, occupied_rooms, module_schedule, acti
 
             found_room_for_this_time = False
 
+            commute_memo = {}
+            unique_campuses = set([r['Campus'] for r in rooms_list])
+
+            for target_campus in unique_campuses:
+                memo_penalty = 0
+                if not pd.isna(mod_code):
+                    first_t = test_t_blocks[0]
+                    last_t = test_t_blocks[-1]
+
+                    prev_t = f"{int(first_t.split(':')[0]) - 1:02d}:00"
+                    prev_active_mods = active_lectures.get((orig_week, test_day, prev_t), set())
+                    for p_mod in prev_active_mods:
+                        if (p_mod, orig_week, test_day, prev_t) in module_schedule:
+                            _, _, p_campus = module_schedule[(p_mod, orig_week, test_day, prev_t)]
+                            dist = distance_dict.get((target_campus, p_campus), distance_dict.get((p_campus, target_campus), 0))
+                            if dist > 10:
+                                if p_mod == mod_code:
+                                    memo_penalty += size * (dist - 10) * w_commute
+                                else:
+                                    clashes = student_clash_dict.get((mod_code, p_mod), 0)
+                                    if clashes > 0:
+                                        memo_penalty += clashes * (dist - 10) * w_commute
+
+                    next_t = f"{int(last_t.split(':')[0]) + 1:02d}:00"
+                    next_active_mods = active_lectures.get((orig_week, test_day, next_t), set())
+                    for n_mod in next_active_mods:
+                        if (n_mod, orig_week, test_day, next_t) in module_schedule:
+                            _, _, n_campus = module_schedule[(n_mod, orig_week, test_day, next_t)]
+                            dist = distance_dict.get((target_campus, n_campus), distance_dict.get((n_campus, target_campus), 0))
+                            if dist > 10:
+                                if n_mod == mod_code:
+                                    memo_penalty += size * (dist - 10) * w_commute
+                                else:
+                                    clashes = student_clash_dict.get((mod_code, n_mod), 0)
+                                    if clashes > 0:
+                                        memo_penalty += clashes * (dist - 10) * w_commute
+
+                commute_memo[target_campus] = memo_penalty
+
             for room in rooms_list:
                 room_id = room['Id']
                 capacity = room['Capacity']
@@ -144,42 +181,9 @@ def allocate_events(demand_df, rooms_list, occupied_rooms, module_schedule, acti
                 if not is_room_available(room_id, orig_week, test_day, test_t_blocks, occupied_rooms):
                     continue
 
-                commute_penalty = 0
-                if not pd.isna(mod_code):
-                    first_t = test_t_blocks[0]
-                    last_t = test_t_blocks[-1]
-
-                    prev_t = f"{int(first_t.split(':')[0]) - 1:02d}:00"
-                    prev_active_mods = active_lectures.get((orig_week, test_day, prev_t), set())
-                    for p_mod in prev_active_mods:
-                        if (p_mod, orig_week, test_day, prev_t) in module_schedule:
-                            _, _, p_campus = module_schedule[(p_mod, orig_week, test_day, prev_t)]
-                            dist = distance_dict.get((test_room_campus, p_campus),
-                                                     distance_dict.get((p_campus, test_room_campus), 0))
-                            if dist > 10:  # [FIXED] 将未定义的 TAU_MAX 改回 10
-                                if p_mod == mod_code:
-                                    commute_penalty += size * (dist - 10) * w_commute
-                                else:
-                                    clashes = student_clash_dict.get((mod_code, p_mod), 0)
-                                    if clashes > 0:
-                                        commute_penalty += clashes * (dist - 10) * w_commute
-
-                    next_t = f"{int(last_t.split(':')[0]) + 1:02d}:00"
-                    next_active_mods = active_lectures.get((orig_week, test_day, next_t), set())
-                    for n_mod in next_active_mods:
-                        if (n_mod, orig_week, test_day, next_t) in module_schedule:
-                            _, _, n_campus = module_schedule[(n_mod, orig_week, test_day, next_t)]
-                            dist = distance_dict.get((test_room_campus, n_campus),
-                                                     distance_dict.get((n_campus, test_room_campus), 0))
-                            if dist > 10:
-                                if n_mod == mod_code:
-                                    commute_penalty += size * (dist - 10) * w_commute
-                                else:
-                                    clashes = student_clash_dict.get((mod_code, n_mod), 0)
-                                    if clashes > 0:
-                                        commute_penalty += clashes * (dist - 10) * w_commute
-
+                commute_penalty = commute_memo.get(test_room_campus, 0)
                 penalty = time_clash_penalty + commute_penalty
+
                 test_rank = day_rank.get(test_day, 0)
                 test_hour = int(str(test_time).split(':')[0])
 
@@ -227,8 +231,7 @@ def allocate_events(demand_df, rooms_list, occupied_rooms, module_schedule, acti
             for t in assigned_t_blocks:
                 occupied_rooms[(best_plan['Assigned_Room'], orig_week, assigned_day, t)] = event_id
                 if not pd.isna(mod_code):
-                    module_schedule[(mod_code, orig_week, assigned_day, t)] = (event_type, best_plan['Assigned_Room'],
-                                                                               best_plan['Assigned_Campus'])
+                    module_schedule[(mod_code, orig_week, assigned_day, t)] = (event_type, best_plan['Assigned_Room'], best_plan['Assigned_Campus'])
                     if event_type in ['Lecture', 'Meeting']:
                         if (orig_week, assigned_day, t) not in active_lectures:
                             active_lectures[(orig_week, assigned_day, t)] = set()
@@ -250,8 +253,7 @@ def allocate_events(demand_df, rooms_list, occupied_rooms, module_schedule, acti
 
     return allocation_results
 
-def optimize_with_sa(allocation_results, rooms_list, occupied_rooms, module_schedule, active_lectures,
-                     student_clash_dict, distance_dict, w_commute, initial_temp=1000, cooling_rate=0.98, max_iter=200):
+def optimize_with_sa(allocation_results, rooms_list, occupied_rooms, module_schedule, active_lectures, student_clash_dict, distance_dict, w_commute, initial_temp=1000, cooling_rate=0.98, max_iter=200):
     print(f"\nStart simulated annealing optimisation (Initial T={initial_temp}, Cooling={cooling_rate})")
 
     all_possible_days = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday']
@@ -263,7 +265,10 @@ def optimize_with_sa(allocation_results, rooms_list, occupied_rooms, module_sche
     best_allocation = copy.deepcopy(allocation_results)
 
     scheduled_indices = [i for i, r in enumerate(allocation_results) if r['Status'] == 'Scheduled']
-    if not scheduled_indices:
+    unscheduled_indices = [i for i, r in enumerate(allocation_results) if r['Status'] == 'Unscheduled']
+    W_UNS_PENALTY = globals().get('W_UNSCHEDULED', 100000)
+
+    if not scheduled_indices and not unscheduled_indices:
         return allocation_results
 
     T = initial_temp
@@ -301,8 +306,7 @@ def optimize_with_sa(allocation_results, rooms_list, occupied_rooms, module_sche
             for p_mod in prev_active_mods:
                 if (p_mod, orig_week, test_day, prev_t) in module_schedule:
                     _, _, p_campus = module_schedule[(p_mod, orig_week, test_day, prev_t)]
-                    dist = distance_dict.get((test_room_campus, p_campus),
-                                             distance_dict.get((p_campus, test_room_campus), 0))
+                    dist = distance_dict.get((test_room_campus, p_campus), distance_dict.get((p_campus, test_room_campus), 0))
                     if dist > 10:
                         if p_mod == mod_code:
                             commute_penalty += size * (dist - 10) * w_commute
@@ -316,8 +320,7 @@ def optimize_with_sa(allocation_results, rooms_list, occupied_rooms, module_sche
             for n_mod in next_active_mods:
                 if (n_mod, orig_week, test_day, next_t) in module_schedule:
                     _, _, n_campus = module_schedule[(n_mod, orig_week, test_day, next_t)]
-                    dist = distance_dict.get((test_room_campus, n_campus),
-                                             distance_dict.get((n_campus, test_room_campus), 0))
+                    dist = distance_dict.get((test_room_campus, n_campus), distance_dict.get((n_campus, test_room_campus), 0))
                     if dist > 10:
                         if n_mod == mod_code:
                             commute_penalty += size * (dist - 10) * w_commute
@@ -336,6 +339,9 @@ def optimize_with_sa(allocation_results, rooms_list, occupied_rooms, module_sche
         return penalty, raw_clash_count, commute_penalty
 
     def update_state(record, day, time, mode="remove"):
+        if record['Status'] == 'Unscheduled' and mode == "remove":
+            return
+
         t_blocks = get_time_blocks(time, record['Blocks'])
         week = record['Week']
         mod_code = record['Module_Code']
@@ -361,58 +367,178 @@ def optimize_with_sa(allocation_results, rooms_list, occupied_rooms, module_sche
 
     while T > 1.0:
         for _ in range(max_iter):
-            idx = random.choice(scheduled_indices)
-            record = allocation_results[idx]
+            rand_action = random.random()
 
-            old_day, old_time = record['Assigned_Time'].split(' ')
-            old_penalty = record['Penalty']
+            if rand_action < 0.2 and unscheduled_indices:
+                idx = random.choice(unscheduled_indices)
+                record = allocation_results[idx]
+                old_penalty = W_UNS_PENALTY
 
-            update_state(record, old_day, old_time, mode="remove")
+                test_room = random.choice(rooms_list)
+                if test_room['Capacity'] < record['Event_Size']: continue
 
-            test_room = random.choice(rooms_list)
-            if test_room['Capacity'] < record['Event_Size']:
-                update_state(record, old_day, old_time, mode="add")
-                continue
+                test_day = random.choice(all_possible_days)
+                test_time = random.choice(all_possible_times)
+                test_t_blocks = get_time_blocks(test_time, record['Blocks'])
 
-            test_day = random.choice(all_possible_days)
-            test_time = random.choice(all_possible_times)
-            test_t_blocks = get_time_blocks(test_time, record['Blocks'])
+                if not is_room_available(test_room['Id'], record['Week'], test_day, test_t_blocks, occupied_rooms):
+                    continue
+                if is_module_clashing(record['Module_Code'], record['Event_Type'], record['Week'], test_day, test_t_blocks, module_schedule):
+                    continue
 
-            if not is_room_available(test_room['Id'], record['Week'], test_day, test_t_blocks, occupied_rooms):
-                update_state(record, old_day, old_time, mode="add")
-                continue
-            if is_module_clashing(record['Module_Code'], record['Event_Type'], record['Week'], test_day, test_t_blocks,
-                                  module_schedule):
-                update_state(record, old_day, old_time, mode="add")
-                continue
+                new_penalty, new_clashes, new_commute = calc_single_penalty(record, test_day, test_time, test_room['Capacity'], test_room['Campus'])
+                delta_e = new_penalty - old_penalty
 
-            new_penalty, new_clashes, new_commute = calc_single_penalty(record, test_day, test_time,
-                                                                        test_room['Capacity'], test_room['Campus'])
-            delta_e = new_penalty - old_penalty
+                if delta_e < 0 or random.random() < math.exp(-delta_e / T):
+                    record['Assigned_Time'] = f"{test_day} {test_time}"
+                    record['Assigned_Room'] = test_room['Id']
+                    record['Assigned_Capacity'] = test_room['Capacity']
+                    record['Assigned_Campus'] = test_room['Campus']
+                    record['Penalty'] = new_penalty
+                    record['Clash_Count'] = new_clashes
+                    record['Commute_Penalty'] = new_commute
+                    record['Status'] = 'Scheduled'
 
-            if delta_e < 0 or random.random() < math.exp(-delta_e / T):
-                record['Assigned_Time'] = f"{test_day} {test_time}"
-                record['Assigned_Room'] = test_room['Id']
-                record['Assigned_Capacity'] = test_room['Capacity']
-                record['Assigned_Campus'] = test_room['Campus']
-                record['Penalty'] = new_penalty
-                record['Clash_Count'] = new_clashes
-                record['Commute_Penalty'] = new_commute
-                update_state(record, test_day, test_time, mode="add")
+                    update_state(record, test_day, test_time, mode="add")
 
-                current_penalty += delta_e
-                accepted_moves += 1
+                    unscheduled_indices.remove(idx)
+                    scheduled_indices.append(idx)
 
-                if current_penalty < best_penalty:
-                    best_penalty = current_penalty
-                    best_allocation = copy.deepcopy(allocation_results)
+                    current_penalty += delta_e
+                    accepted_moves += 1
+
+                    if current_penalty < best_penalty:
+                        best_penalty = current_penalty
+                        best_allocation = copy.deepcopy(allocation_results)
+
+            elif rand_action < 0.6 and len(scheduled_indices) >= 2:
+                idx1, idx2 = random.sample(scheduled_indices, 2)
+                rec1 = allocation_results[idx1]
+                rec2 = allocation_results[idx2]
+
+                day1, time1 = rec1['Assigned_Time'].split(' ')
+                room1 = rec1['Assigned_Room']
+                cap1 = rec1['Assigned_Capacity']
+                cam1 = rec1['Assigned_Campus']
+                pen1 = rec1['Penalty']
+
+                day2, time2 = rec2['Assigned_Time'].split(' ')
+                room2 = rec2['Assigned_Room']
+                cap2 = rec2['Assigned_Capacity']
+                cam2 = rec2['Assigned_Campus']
+                pen2 = rec2['Penalty']
+
+                if cap2 < rec1['Event_Size'] or cap1 < rec2['Event_Size']:
+                    continue
+
+                update_state(rec1, day1, time1, mode="remove")
+                update_state(rec2, day2, time2, mode="remove")
+
+                tb1_new = get_time_blocks(time2, rec1['Blocks'])
+                tb2_new = get_time_blocks(time1, rec2['Blocks'])
+
+                valid = True
+                if not is_room_available(room2, rec1['Week'], day2, tb1_new, occupied_rooms) or \
+                        is_module_clashing(rec1['Module_Code'], rec1['Event_Type'], rec1['Week'], day2, tb1_new, module_schedule):
+                    valid = False
+
+                if valid and (not is_room_available(room1, rec2['Week'], day1, tb2_new, occupied_rooms) or \
+                              is_module_clashing(rec2['Module_Code'], rec2['Event_Type'], rec2['Week'], day1, tb2_new, module_schedule)):
+                    valid = False
+
+                if not valid:
+                    update_state(rec1, day1, time1, mode="add")
+                    update_state(rec2, day2, time2, mode="add")
+                    continue
+
+                new_pen1, clash1, comm1 = calc_single_penalty(rec1, day2, time2, cap2, cam2)
+                new_pen2, clash2, comm2 = calc_single_penalty(rec2, day1, time1, cap1, cam1)
+
+                delta_e = (new_pen1 + new_pen2) - (pen1 + pen2)
+
+                if delta_e < 0 or random.random() < math.exp(-delta_e / T):
+                    rec1['Assigned_Time'] = f"{day2} {time2}"
+                    rec1['Assigned_Room'] = room2
+                    rec1['Assigned_Capacity'] = cap2
+                    rec1['Assigned_Campus'] = cam2
+                    rec1['Penalty'] = new_pen1
+                    rec1['Clash_Count'] = clash1
+                    rec1['Commute_Penalty'] = comm1
+
+                    rec2['Assigned_Time'] = f"{day1} {time1}"
+                    rec2['Assigned_Room'] = room1
+                    rec2['Assigned_Capacity'] = cap1
+                    rec2['Assigned_Campus'] = cam1
+                    rec2['Penalty'] = new_pen2
+                    rec2['Clash_Count'] = clash2
+                    rec2['Commute_Penalty'] = comm2
+
+                    update_state(rec1, day2, time2, mode="add")
+                    update_state(rec2, day1, time1, mode="add")
+
+                    current_penalty += delta_e
+                    accepted_moves += 1
+
+                    if current_penalty < best_penalty:
+                        best_penalty = current_penalty
+                        best_allocation = copy.deepcopy(allocation_results)
+                else:
+                    update_state(rec1, day1, time1, mode="add")
+                    update_state(rec2, day2, time2, mode="add")
+
             else:
-                update_state(record, old_day, old_time, mode="add")
+                if not scheduled_indices: continue
+                idx = random.choice(scheduled_indices)
+                record = allocation_results[idx]
+
+                old_day, old_time = record['Assigned_Time'].split(' ')
+                old_penalty = record['Penalty']
+
+                update_state(record, old_day, old_time, mode="remove")
+
+                test_room = random.choice(rooms_list)
+                if test_room['Capacity'] < record['Event_Size']:
+                    update_state(record, old_day, old_time, mode="add")
+                    continue
+
+                test_day = random.choice(all_possible_days)
+                test_time = random.choice(all_possible_times)
+                test_t_blocks = get_time_blocks(test_time, record['Blocks'])
+
+                if not is_room_available(test_room['Id'], record['Week'], test_day, test_t_blocks, occupied_rooms):
+                    update_state(record, old_day, old_time, mode="add")
+                    continue
+                if is_module_clashing(record['Module_Code'], record['Event_Type'], record['Week'], test_day, test_t_blocks,
+                                      module_schedule):
+                    update_state(record, old_day, old_time, mode="add")
+                    continue
+
+                new_penalty, new_clashes, new_commute = calc_single_penalty(record, test_day, test_time,
+                                                                            test_room['Capacity'], test_room['Campus'])
+                delta_e = new_penalty - old_penalty
+
+                if delta_e < 0 or random.random() < math.exp(-delta_e / T):
+                    record['Assigned_Time'] = f"{test_day} {test_time}"
+                    record['Assigned_Room'] = test_room['Id']
+                    record['Assigned_Capacity'] = test_room['Capacity']
+                    record['Assigned_Campus'] = test_room['Campus']
+                    record['Penalty'] = new_penalty
+                    record['Clash_Count'] = new_clashes
+                    record['Commute_Penalty'] = new_commute
+                    update_state(record, test_day, test_time, mode="add")
+
+                    current_penalty += delta_e
+                    accepted_moves += 1
+
+                    if current_penalty < best_penalty:
+                        best_penalty = current_penalty
+                        best_allocation = copy.deepcopy(allocation_results)
+                else:
+                    update_state(record, old_day, old_time, mode="add")
 
         T *= cooling_rate
 
-    print(
-        f"Simulated annealing complete, Total valid adjustments received {accepted_moves}. Global penalty: {best_penalty}")
+    print(f"Simulated annealing complete, Total valid adjustments received {accepted_moves}. Global penalty: {best_penalty}")
     return best_allocation
 
 
@@ -424,9 +550,10 @@ def print_stage_summary(title, score, metrics):
     print(f"Wasted Seats Total:     {metrics['wasted_seats_count']}")
     print(f"Time Shifted Count:     {metrics['time_shifted_count']}")
     unscheduled = metrics.get('unscheduled_count', 0)
-    print(f"Failure Rate:           {(unscheduled / len(demand_df) * 100):.2f}%")
-    print("=" * (42 + len(title)))
 
+    total_events = len(demand_df) if 'demand_df' in globals() else 1
+    print(f"Failure Rate:           {(unscheduled / total_events * 100):.2f}%")
+    print("=" * (42 + len(title)))
 
 if __name__ == "__main__":
 
@@ -435,7 +562,7 @@ if __name__ == "__main__":
     parser.add_argument("--w_day", type=float, default=W_DAY_SHIFT)
     parser.add_argument("--w_hour", type=float, default=W_HOUR_SHIFT)
     parser.add_argument("--w_wasted", type=float, default=W_WASTED_SEAT)
-    parser.add_argument("--w_commute", type=float, default=W_COMMUTE)  # 你的Hyperparameter里记得有这行
+    parser.add_argument("--w_commute", type=float, default=W_COMMUTE)
     parser.add_argument("--exp_name", type=str, default="Default_Exp")
     parser.add_argument("--use_sa", action="store_true", help="Enable Simulated Annealing refinement")
     args = parser.parse_args()
@@ -446,17 +573,19 @@ if __name__ == "__main__":
     W_WASTED_SEAT = args.w_wasted
     W_COMMUTE = args.w_commute
 
-    print(
-        f"\nStart the experiment: [{args.exp_name}] | Clash={W_STUDENT_CLASH}, Day={W_DAY_SHIFT}, Wasted={W_WASTED_SEAT}, Commute={W_COMMUTE}")
+    print(f"\nStart the experiment: [{args.exp_name}] | Clash={W_STUDENT_CLASH}, Day={W_DAY_SHIFT}, Wasted={W_WASTED_SEAT}, Commute={W_COMMUTE}")
 
-    demand_df = pd.read_csv('processed_data/2024-5_data_demand_General Teaching_Holyrood.csv')
+    demand_holyrood = pd.read_csv('processed_data/2024-5_data_demand_General Teaching_Holyrood.csv')
+    demand_central = pd.read_csv('processed_data/2024-5_data_demand_General Teaching_Central.csv')
+    demand_df = pd.concat([demand_holyrood, demand_central], ignore_index=True)
     demand_df = demand_df.sort_values(by=['Event Size'], ascending=False).reset_index(drop=True)
+
     rooms_df = pd.read_csv('processed_data/Room_data_General Teaching_Central.csv')
     rooms_df['Capacity'] = pd.to_numeric(rooms_df['Capacity'], errors='coerce').fillna(0)
     rooms_list = rooms_df.sort_values(by='Capacity', ascending=True).to_dict('records')
 
     all_campuses_df = pd.read_csv('processed_data/2024-5_data_demand_General Teaching_All.csv')
-    global_background_df = all_campuses_df[all_campuses_df['Campus'] != 'Holyrood'].reset_index(drop=True)
+    global_background_df = all_campuses_df[~all_campuses_df['Campus'].isin(['Holyrood', 'Central'])].reset_index(drop=True)
 
     clash_df = pd.read_csv('processed_data/student_clash_matrix.csv')
     student_clash_dict = {}
@@ -471,7 +600,6 @@ if __name__ == "__main__":
         for col in dist_df.columns:
             if col != 'Campus From':
                 distance_dict[(campus_from, col)] = float(row[col])
-
 
     occupied_rooms = {}
     module_schedule = {}

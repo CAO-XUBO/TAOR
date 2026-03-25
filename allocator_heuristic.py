@@ -6,6 +6,7 @@ import argparse
 import math
 import random
 import copy
+import time
 
 def calculate_objective_score(allocation_results):
     metrics = {
@@ -565,6 +566,7 @@ if __name__ == "__main__":
     parser.add_argument("--w_commute", type=float, default=W_COMMUTE)
     parser.add_argument("--exp_name", type=str, default="Default_Exp")
     parser.add_argument("--use_sa", action="store_true", help="Enable Simulated Annealing refinement")
+    parser.add_argument("--scenario", type=str, choices=['local', 'global'], default='global', help="Run mode")
     args = parser.parse_args()
 
     W_STUDENT_CLASH = args.w_clash
@@ -573,19 +575,27 @@ if __name__ == "__main__":
     W_WASTED_SEAT = args.w_wasted
     W_COMMUTE = args.w_commute
 
-    print(f"\nStart the experiment: [{args.exp_name}] | Clash={W_STUDENT_CLASH}, Day={W_DAY_SHIFT}, Wasted={W_WASTED_SEAT}, Commute={W_COMMUTE}")
+    print(
+        f"\nStart the experiment: [{args.exp_name}] | Clash={W_STUDENT_CLASH}, Day={W_DAY_SHIFT}, Wasted={W_WASTED_SEAT}, Commute={W_COMMUTE}")
 
-    demand_holyrood = pd.read_csv('processed_data/2024-5_data_demand_General Teaching_Holyrood.csv')
-    demand_central = pd.read_csv('processed_data/2024-5_data_demand_General Teaching_Central.csv')
-    demand_df = pd.concat([demand_holyrood, demand_central], ignore_index=True)
+    if args.scenario == 'local':
+        demand_df = pd.read_csv('processed_data/2024-5_data_demand_General Teaching_Holyrood.csv')
+
+        all_campuses_df = pd.read_csv('processed_data/2024-5_data_demand_General Teaching_All.csv')
+        global_background_df = all_campuses_df[~all_campuses_df['Campus'].isin(['Holyrood'])].reset_index(drop=True)
+
+    elif args.scenario == 'global':
+        demand_holyrood = pd.read_csv('processed_data/2024-5_data_demand_General Teaching_Holyrood.csv')
+        demand_central = pd.read_csv('processed_data/2024-5_data_demand_General Teaching_Central.csv')
+        demand_df = pd.concat([demand_holyrood, demand_central], ignore_index=True)
+
+        global_background_df = pd.DataFrame()
+
     demand_df = demand_df.sort_values(by=['Event Size'], ascending=False).reset_index(drop=True)
 
     rooms_df = pd.read_csv('processed_data/Room_data_General Teaching_Central.csv')
     rooms_df['Capacity'] = pd.to_numeric(rooms_df['Capacity'], errors='coerce').fillna(0)
     rooms_list = rooms_df.sort_values(by='Capacity', ascending=True).to_dict('records')
-
-    all_campuses_df = pd.read_csv('processed_data/2024-5_data_demand_General Teaching_All.csv')
-    global_background_df = all_campuses_df[~all_campuses_df['Campus'].isin(['Holyrood', 'Central'])].reset_index(drop=True)
 
     clash_df = pd.read_csv('processed_data/student_clash_matrix.csv')
     student_clash_dict = {}
@@ -604,6 +614,8 @@ if __name__ == "__main__":
     occupied_rooms = {}
     module_schedule = {}
     active_lectures = {}
+
+    start_time = time.time()
 
     prefill_local_demand(global_background_df, occupied_rooms, module_schedule, active_lectures)
 
@@ -637,15 +649,21 @@ if __name__ == "__main__":
         final_score = sa_score
         final_metrics = sa_metrics
 
+    end_time = time.time()
+    execution_time = round(end_time - start_time, 2)
+    print(f"\nTotal Algorithm Execution Time: {execution_time} seconds")
+
+    detailed_file = f"results/{args.exp_name}_Detailed.csv"
     results_df = pd.DataFrame(final_results)
-    results_df.to_csv("results/Final_Allocation_Results.csv", index=False)
+    results_df.to_csv(detailed_file, index=False)
+    print(f"Detailed allocation saved to: {detailed_file}")
 
     summary_file = f"results/{args.exp_name}_Summary.csv"
     file_exists = os.path.isfile(summary_file)
     with open(summary_file, "a", encoding="utf-8") as f:
         if not file_exists:
             f.write(
-                "W_CLASH,W_DAY,W_HOUR,W_WASTED,W_COMMUTE,Time_Shifted,Wasted_Seats,Student_Clashes,Commute_Penalty,Total_Penalty\n")
+                "W_CLASH,W_DAY,W_HOUR,W_WASTED,W_COMMUTE,Time_Shifted,Wasted_Seats,Student_Clashes,Commute_Penalty,Total_Penalty,Execution_Time\n")
         f.write(
-            f"{W_STUDENT_CLASH},{W_DAY_SHIFT},{W_HOUR_SHIFT},{W_WASTED_SEAT},{W_COMMUTE},{final_metrics['time_shifted_count']},{final_metrics['wasted_seats_count']},{final_metrics['total_student_clashes']},{final_metrics['total_commute_penalty']},{final_score}\n"
+            f"{W_STUDENT_CLASH},{W_DAY_SHIFT},{W_HOUR_SHIFT},{W_WASTED_SEAT},{W_COMMUTE},{final_metrics['time_shifted_count']},{final_metrics['wasted_seats_count']},{final_metrics['total_student_clashes']},{final_metrics['total_commute_penalty']},{final_score},{execution_time}\n"
         )

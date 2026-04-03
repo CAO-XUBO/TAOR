@@ -6,6 +6,7 @@ import argparse
 import math
 import random
 import copy
+import time
 
 def calculate_objective_score(allocation_results):
     metrics = {
@@ -61,7 +62,7 @@ def is_module_clashing(module_code, event_type, week, day, time_block_list, modu
                 return True
     return False
 
-def prefill_local_demand(local_demand_df, occupied_rooms, module_schedule, active_lectures):
+def prefill_local_demand(local_demand_df, occupied_rooms, module_schedule, active_modules):
     for _, row in local_demand_df.iterrows():
         room = row['Room']
         campus = row.get('Campus', 'Unknown')
@@ -77,12 +78,12 @@ def prefill_local_demand(local_demand_df, occupied_rooms, module_schedule, activ
             occupied_rooms[(room, week, day, t)] = row['Event ID']
             if not pd.isna(mod_code):
                 module_schedule[(mod_code, week, day, t)] = (event_type, room, campus)
-                if event_type in ['Lecture', 'Meeting']:
-                    if (week, day, t) not in active_lectures:
-                        active_lectures[(week, day, t)] = set()
-                    active_lectures[(week, day, t)].add(mod_code)
+                if (week, day, t) not in active_modules:
+                    active_modules[(week, day, t)] = set()
+                active_modules[(week, day, t)].add(mod_code)
 
-def allocate_events(demand_df, rooms_list, occupied_rooms, module_schedule, active_lectures, student_clash_dict, distance_dict, w_commute):
+def allocate_events(demand_df, rooms_list, occupied_rooms, module_schedule, active_modules, student_clash_dict,
+                    distance_dict, w_commute):
     allocation_results = []
     all_possible_days = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday']
     all_possible_times = [f"{str(h).zfill(2)}:00" for h in range(9, 18)]
@@ -124,7 +125,7 @@ def allocate_events(demand_df, rooms_list, occupied_rooms, module_schedule, acti
             raw_clash_count = 0
             if event_type in ['Lecture', 'Meeting'] and not pd.isna(mod_code):
                 for t in test_t_blocks:
-                    existing_mods = active_lectures.get((orig_week, test_day, t), set())
+                    existing_mods = active_modules.get((orig_week, test_day, t), set())
                     for e_mod in existing_mods:
                         clashes = student_clash_dict.get((mod_code, e_mod), 0)
                         raw_clash_count += clashes
@@ -141,33 +142,18 @@ def allocate_events(demand_df, rooms_list, occupied_rooms, module_schedule, acti
                     first_t = test_t_blocks[0]
                     last_t = test_t_blocks[-1]
 
-                    prev_t = f"{int(first_t.split(':')[0]) - 1:02d}:00"
-                    prev_active_mods = active_lectures.get((orig_week, test_day, prev_t), set())
-                    for p_mod in prev_active_mods:
-                        if (p_mod, orig_week, test_day, prev_t) in module_schedule:
-                            _, _, p_campus = module_schedule[(p_mod, orig_week, test_day, prev_t)]
-                            dist = distance_dict.get((target_campus, p_campus), distance_dict.get((p_campus, target_campus), 0))
-                            if dist > 10:
-                                if p_mod == mod_code:
-                                    memo_penalty += size * (dist - 10) * w_commute
-                                else:
-                                    clashes = student_clash_dict.get((mod_code, p_mod), 0)
-                                    if clashes > 0:
-                                        memo_penalty += clashes * (dist - 10) * w_commute
+                    for h_offset in [-1, 1]:
+                        check_h = (int(first_t.split(':')[0]) - 1) if h_offset == -1 else (
+                                    int(last_t.split(':')[0]) + 1)
+                        check_t = f"{check_h:02d}:00"
 
-                    next_t = f"{int(last_t.split(':')[0]) + 1:02d}:00"
-                    next_active_mods = active_lectures.get((orig_week, test_day, next_t), set())
-                    for n_mod in next_active_mods:
-                        if (n_mod, orig_week, test_day, next_t) in module_schedule:
-                            _, _, n_campus = module_schedule[(n_mod, orig_week, test_day, next_t)]
-                            dist = distance_dict.get((target_campus, n_campus), distance_dict.get((n_campus, target_campus), 0))
-                            if dist > 10:
-                                if n_mod == mod_code:
-                                    memo_penalty += size * (dist - 10) * w_commute
-                                else:
-                                    clashes = student_clash_dict.get((mod_code, n_mod), 0)
-                                    if clashes > 0:
-                                        memo_penalty += clashes * (dist - 10) * w_commute
+                        for m in active_modules.get((orig_week, test_day, check_t), set()):
+                            if (m, orig_week, test_day, check_t) in module_schedule:
+                                _, _, m_campus = module_schedule[(m, orig_week, test_day, check_t)]
+
+                                if target_campus != m_campus:
+                                    weight = size if m == mod_code else student_clash_dict.get((mod_code, m), 0)
+                                    memo_penalty += weight * w_commute
 
                 commute_memo[target_campus] = memo_penalty
 
@@ -231,11 +217,11 @@ def allocate_events(demand_df, rooms_list, occupied_rooms, module_schedule, acti
             for t in assigned_t_blocks:
                 occupied_rooms[(best_plan['Assigned_Room'], orig_week, assigned_day, t)] = event_id
                 if not pd.isna(mod_code):
-                    module_schedule[(mod_code, orig_week, assigned_day, t)] = (event_type, best_plan['Assigned_Room'], best_plan['Assigned_Campus'])
-                    if event_type in ['Lecture', 'Meeting']:
-                        if (orig_week, assigned_day, t) not in active_lectures:
-                            active_lectures[(orig_week, assigned_day, t)] = set()
-                        active_lectures[(orig_week, assigned_day, t)].add(mod_code)
+                    module_schedule[(mod_code, orig_week, assigned_day, t)] = (event_type, best_plan['Assigned_Room'],
+                                                                               best_plan['Assigned_Campus'])
+                    if (orig_week, assigned_day, t) not in active_modules:
+                        active_modules[(orig_week, assigned_day, t)] = set()
+                    active_modules[(orig_week, assigned_day, t)].add(mod_code)
         else:
             allocation_results.append({
                 'Session_ID': session_id,
@@ -253,7 +239,8 @@ def allocate_events(demand_df, rooms_list, occupied_rooms, module_schedule, acti
 
     return allocation_results
 
-def optimize_with_sa(allocation_results, rooms_list, occupied_rooms, module_schedule, active_lectures, student_clash_dict, distance_dict, w_commute, initial_temp=1000, cooling_rate=0.98, max_iter=200):
+def optimize_with_sa(allocation_results, rooms_list, occupied_rooms, module_schedule, active_modules,
+                     student_clash_dict, distance_dict, w_commute, initial_temp=1000, cooling_rate=0.98, max_iter=200):
     print(f"\nStart simulated annealing optimisation (Initial T={initial_temp}, Cooling={cooling_rate})")
 
     all_possible_days = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday']
@@ -286,7 +273,7 @@ def optimize_with_sa(allocation_results, rooms_list, occupied_rooms, module_sche
         test_t_blocks = get_time_blocks(test_time, record['Blocks'])
         if record['Event_Type'] in ['Lecture', 'Meeting'] and not pd.isna(record['Module_Code']):
             for t in test_t_blocks:
-                existing_mods = active_lectures.get((record['Week'], test_day, t), set())
+                existing_mods = active_modules.get((record['Week'], test_day, t), set())
                 for e_mod in existing_mods:
                     if e_mod != record['Module_Code']:
                         clashes = student_clash_dict.get((record['Module_Code'], e_mod), 0)
@@ -301,33 +288,20 @@ def optimize_with_sa(allocation_results, rooms_list, occupied_rooms, module_sche
             last_t = test_t_blocks[-1]
             size = record['Event_Size']
 
-            prev_t = f"{int(first_t.split(':')[0]) - 1:02d}:00"
-            prev_active_mods = active_lectures.get((orig_week, test_day, prev_t), set())
-            for p_mod in prev_active_mods:
-                if (p_mod, orig_week, test_day, prev_t) in module_schedule:
-                    _, _, p_campus = module_schedule[(p_mod, orig_week, test_day, prev_t)]
-                    dist = distance_dict.get((test_room_campus, p_campus), distance_dict.get((p_campus, test_room_campus), 0))
-                    if dist > 10:
-                        if p_mod == mod_code:
-                            commute_penalty += size * (dist - 10) * w_commute
-                        else:
-                            clashes = student_clash_dict.get((mod_code, p_mod), 0)
-                            if clashes > 0:
-                                commute_penalty += clashes * (dist - 10) * w_commute
+            for h_offset in [-1, 1]:
+                check_h = (int(first_t.split(':')[0]) - 1) if h_offset == -1 else (int(last_t.split(':')[0]) + 1)
+                check_t = f"{check_h:02d}:00"
+                for m in active_modules.get((orig_week, test_day, check_t), set()):
+                    if (m, orig_week, test_day, check_t) in module_schedule:
+                        _, _, m_campus = module_schedule[(m, orig_week, test_day, check_t)]
 
-            next_t = f"{int(last_t.split(':')[0]) + 1:02d}:00"
-            next_active_mods = active_lectures.get((orig_week, test_day, next_t), set())
-            for n_mod in next_active_mods:
-                if (n_mod, orig_week, test_day, next_t) in module_schedule:
-                    _, _, n_campus = module_schedule[(n_mod, orig_week, test_day, next_t)]
-                    dist = distance_dict.get((test_room_campus, n_campus), distance_dict.get((n_campus, test_room_campus), 0))
-                    if dist > 10:
-                        if n_mod == mod_code:
-                            commute_penalty += size * (dist - 10) * w_commute
-                        else:
-                            clashes = student_clash_dict.get((mod_code, n_mod), 0)
-                            if clashes > 0:
-                                commute_penalty += clashes * (dist - 10) * w_commute
+                        if test_room_campus != m_campus:
+                            if m == mod_code:
+                                commute_penalty += size * w_commute
+                            else:
+                                clashes = student_clash_dict.get((mod_code, m), 0)
+                                if clashes > 0:
+                                    commute_penalty += clashes * w_commute
 
         day_diff = abs(test_rank - orig_rank)
         hour_diff = abs(test_hour - orig_hour)
@@ -354,16 +328,15 @@ def optimize_with_sa(allocation_results, rooms_list, occupied_rooms, module_sche
                 occupied_rooms.pop((room_id, week, day, t), None)
                 if not pd.isna(mod_code):
                     module_schedule.pop((mod_code, week, day, t), None)
-                    if event_type in ['Lecture', 'Meeting'] and (week, day, t) in active_lectures:
-                        active_lectures[(week, day, t)].discard(mod_code)
+                    if (week, day, t) in active_modules:
+                        active_modules[(week, day, t)].discard(mod_code)
             elif mode == "add":
                 occupied_rooms[(room_id, week, day, t)] = record['Event_ID']
                 if not pd.isna(mod_code):
                     module_schedule[(mod_code, week, day, t)] = (event_type, room_id, campus)
-                    if event_type in ['Lecture', 'Meeting']:
-                        if (week, day, t) not in active_lectures:
-                            active_lectures[(week, day, t)] = set()
-                        active_lectures[(week, day, t)].add(mod_code)
+                    if (week, day, t) not in active_modules:
+                        active_modules[(week, day, t)] = set()
+                    active_modules[(week, day, t)].add(mod_code)
 
     while T > 1.0:
         for _ in range(max_iter):
@@ -383,10 +356,12 @@ def optimize_with_sa(allocation_results, rooms_list, occupied_rooms, module_sche
 
                 if not is_room_available(test_room['Id'], record['Week'], test_day, test_t_blocks, occupied_rooms):
                     continue
-                if is_module_clashing(record['Module_Code'], record['Event_Type'], record['Week'], test_day, test_t_blocks, module_schedule):
+                if is_module_clashing(record['Module_Code'], record['Event_Type'], record['Week'], test_day,
+                                      test_t_blocks, module_schedule):
                     continue
 
-                new_penalty, new_clashes, new_commute = calc_single_penalty(record, test_day, test_time, test_room['Capacity'], test_room['Campus'])
+                new_penalty, new_clashes, new_commute = calc_single_penalty(record, test_day, test_time,
+                                                                            test_room['Capacity'], test_room['Campus'])
                 delta_e = new_penalty - old_penalty
 
                 if delta_e < 0 or random.random() < math.exp(-delta_e / T):
@@ -439,11 +414,13 @@ def optimize_with_sa(allocation_results, rooms_list, occupied_rooms, module_sche
 
                 valid = True
                 if not is_room_available(room2, rec1['Week'], day2, tb1_new, occupied_rooms) or \
-                        is_module_clashing(rec1['Module_Code'], rec1['Event_Type'], rec1['Week'], day2, tb1_new, module_schedule):
+                        is_module_clashing(rec1['Module_Code'], rec1['Event_Type'], rec1['Week'], day2, tb1_new,
+                                           module_schedule):
                     valid = False
 
                 if valid and (not is_room_available(room1, rec2['Week'], day1, tb2_new, occupied_rooms) or \
-                              is_module_clashing(rec2['Module_Code'], rec2['Event_Type'], rec2['Week'], day1, tb2_new, module_schedule)):
+                              is_module_clashing(rec2['Module_Code'], rec2['Event_Type'], rec2['Week'], day1, tb2_new,
+                                                 module_schedule)):
                     valid = False
 
                 if not valid:
@@ -508,7 +485,8 @@ def optimize_with_sa(allocation_results, rooms_list, occupied_rooms, module_sche
                 if not is_room_available(test_room['Id'], record['Week'], test_day, test_t_blocks, occupied_rooms):
                     update_state(record, old_day, old_time, mode="add")
                     continue
-                if is_module_clashing(record['Module_Code'], record['Event_Type'], record['Week'], test_day, test_t_blocks,
+                if is_module_clashing(record['Module_Code'], record['Event_Type'], record['Week'], test_day,
+                                      test_t_blocks,
                                       module_schedule):
                     update_state(record, old_day, old_time, mode="add")
                     continue
@@ -538,7 +516,8 @@ def optimize_with_sa(allocation_results, rooms_list, occupied_rooms, module_sche
 
         T *= cooling_rate
 
-    print(f"Simulated annealing complete, Total valid adjustments received {accepted_moves}. Global penalty: {best_penalty}")
+    print(
+        f"Simulated annealing complete, Total valid adjustments received {accepted_moves}. Global penalty: {best_penalty}")
     return best_allocation
 
 
@@ -565,6 +544,7 @@ if __name__ == "__main__":
     parser.add_argument("--w_commute", type=float, default=W_COMMUTE)
     parser.add_argument("--exp_name", type=str, default="Default_Exp")
     parser.add_argument("--use_sa", action="store_true", help="Enable Simulated Annealing refinement")
+    parser.add_argument("--scenario", type=str, choices=['local', 'global'], default='global', help="Run mode")
     args = parser.parse_args()
 
     W_STUDENT_CLASH = args.w_clash
@@ -573,19 +553,28 @@ if __name__ == "__main__":
     W_WASTED_SEAT = args.w_wasted
     W_COMMUTE = args.w_commute
 
-    print(f"\nStart the experiment: [{args.exp_name}] | Clash={W_STUDENT_CLASH}, Day={W_DAY_SHIFT}, Wasted={W_WASTED_SEAT}, Commute={W_COMMUTE}")
+    print(
+        f"\nStart the experiment: [{args.exp_name}] | Clash={W_STUDENT_CLASH}, Day={W_DAY_SHIFT}, Wasted={W_WASTED_SEAT}, Commute={W_COMMUTE}")
 
-    demand_holyrood = pd.read_csv('processed_data/2024-5_data_demand_General Teaching_Holyrood.csv')
-    demand_central = pd.read_csv('processed_data/2024-5_data_demand_General Teaching_Central.csv')
-    demand_df = pd.concat([demand_holyrood, demand_central], ignore_index=True)
+    if args.scenario == 'local':
+        demand_df = pd.read_csv('processed_data/2024-5_data_demand_General Teaching_Holyrood.csv')
+
+        all_campuses_df = pd.read_csv('processed_data/2024-5_data_demand_General Teaching_All.csv')
+        global_background_df = all_campuses_df[~all_campuses_df['Campus'].isin(['Holyrood'])].reset_index(drop=True)
+
+    elif args.scenario == 'global':
+        demand_holyrood = pd.read_csv('processed_data/2024-5_data_demand_General Teaching_Holyrood.csv')
+        demand_central = pd.read_csv('processed_data/2024-5_data_demand_General Teaching_Central.csv')
+        demand_df = pd.concat([demand_holyrood, demand_central], ignore_index=True)
+
+        all_data = pd.read_csv('processed_data/2024-5_data_demand_General Teaching_All.csv')
+        global_background_df = all_data[~all_data['Event ID'].isin(demand_df['Event ID'])].reset_index(drop=True)
+
     demand_df = demand_df.sort_values(by=['Event Size'], ascending=False).reset_index(drop=True)
 
     rooms_df = pd.read_csv('processed_data/Room_data_General Teaching_Central.csv')
     rooms_df['Capacity'] = pd.to_numeric(rooms_df['Capacity'], errors='coerce').fillna(0)
     rooms_list = rooms_df.sort_values(by='Capacity', ascending=True).to_dict('records')
-
-    all_campuses_df = pd.read_csv('processed_data/2024-5_data_demand_General Teaching_All.csv')
-    global_background_df = all_campuses_df[~all_campuses_df['Campus'].isin(['Holyrood', 'Central'])].reset_index(drop=True)
 
     clash_df = pd.read_csv('processed_data/student_clash_matrix.csv')
     student_clash_dict = {}
@@ -603,13 +592,15 @@ if __name__ == "__main__":
 
     occupied_rooms = {}
     module_schedule = {}
-    active_lectures = {}
+    active_modules = {}
 
-    prefill_local_demand(global_background_df, occupied_rooms, module_schedule, active_lectures)
+    start_time = time.time()
+
+    prefill_local_demand(global_background_df, occupied_rooms, module_schedule, active_modules)
 
     greedy_results = allocate_events(
         demand_df, rooms_list, occupied_rooms, module_schedule,
-        active_lectures, student_clash_dict, distance_dict, W_COMMUTE
+        active_modules, student_clash_dict, distance_dict, W_COMMUTE
     )
     greedy_score, greedy_metrics = calculate_objective_score(greedy_results)
 
@@ -622,7 +613,7 @@ if __name__ == "__main__":
     if args.use_sa:
         sa_results = optimize_with_sa(
             copy.deepcopy(greedy_results), rooms_list, occupied_rooms,
-            module_schedule, active_lectures, student_clash_dict,
+            module_schedule, active_modules, student_clash_dict,
             distance_dict, W_COMMUTE,
             initial_temp=5000, cooling_rate=0.99, max_iter=20000
         )
@@ -637,15 +628,21 @@ if __name__ == "__main__":
         final_score = sa_score
         final_metrics = sa_metrics
 
+    end_time = time.time()
+    execution_time = round(end_time - start_time, 2)
+    print(f"\nTotal Algorithm Execution Time: {execution_time} seconds")
+
+    detailed_file = f"results/{args.exp_name}_Detailed.csv"
     results_df = pd.DataFrame(final_results)
-    results_df.to_csv("results/Final_Allocation_Results.csv", index=False)
+    results_df.to_csv(detailed_file, index=False)
+    print(f"Detailed allocation saved to: {detailed_file}")
 
     summary_file = f"results/{args.exp_name}_Summary.csv"
     file_exists = os.path.isfile(summary_file)
     with open(summary_file, "a", encoding="utf-8") as f:
         if not file_exists:
             f.write(
-                "W_CLASH,W_DAY,W_HOUR,W_WASTED,W_COMMUTE,Time_Shifted,Wasted_Seats,Student_Clashes,Commute_Penalty,Total_Penalty\n")
+                "W_CLASH,W_DAY,W_HOUR,W_WASTED,W_COMMUTE,Time_Shifted,Wasted_Seats,Student_Clashes,Commute_Penalty,Total_Penalty,Execution_Time\n")
         f.write(
-            f"{W_STUDENT_CLASH},{W_DAY_SHIFT},{W_HOUR_SHIFT},{W_WASTED_SEAT},{W_COMMUTE},{final_metrics['time_shifted_count']},{final_metrics['wasted_seats_count']},{final_metrics['total_student_clashes']},{final_metrics['total_commute_penalty']},{final_score}\n"
+            f"{W_STUDENT_CLASH},{W_DAY_SHIFT},{W_HOUR_SHIFT},{W_WASTED_SEAT},{W_COMMUTE},{final_metrics['time_shifted_count']},{final_metrics['wasted_seats_count']},{final_metrics['total_student_clashes']},{final_metrics['total_commute_penalty']},{final_score},{execution_time}\n"
         )

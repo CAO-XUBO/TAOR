@@ -34,3 +34,26 @@ These scripts contain our core analytical models and generate the evidence base 
 * **`weekly_spillover.py` (Time-Series Bottleneck Analysis)**
   * **Functionality:** Abandons traditional annual averages to run a strict 52-week discrete-time simulation. It calculates demand and classroom spillover on a week-by-week basis.
   * **Business Value:** Eliminates the "ghost capacity" illusion caused by quiet holiday periods. It successfully isolates and visualizes mid-semester bottlenecks (e.g., peak teaching weeks), providing the Timetabling Team with actionable risk-management data.
+
+## Stress Testing
+
+* **`stress_test.py`**
+  * **Functionality:** Performs demand stress testing by scaling timetable demand while keeping room supply fixed, then reports failure rate and objective metrics at each load level.
+  * **Inputs:** Processed demand, room capacity, clash matrix, and campus distance matrix.
+  * **Outputs:** CSV summary and PNG trend chart in `results/`.
+
+### Reproducibility Commands
+
+* Coarse scan (`1.00x` to `4.50x`, step `0.25`):
+  * `python stress_test.py --scenario local --start 1.00 --end 4.50 --step 0.25 --tag heuristic_method_local_100_450_s25`
+* Fine scan around the critical region:
+  * `python stress_test.py --scenario local --start 2.80 --end 4.00 --step 0.05 --tag heuristic_method_local_280_400_s05_combined`
+
+### Presentation Result Files
+
+The following stress-test outputs are kept for presentation and report use:
+
+* `results/stress_test_heuristic_method_local_100_450_s25.csv`
+* `results/stress_test_heuristic_method_local_100_450_s25.png`
+* `results/stress_test_heuristic_method_local_280_400_s05_combined.csv`
+* `results/stress_test_heuristic_method_local_280_400_s05_combined.png`
